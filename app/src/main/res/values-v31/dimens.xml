@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+: use the launcher's own widget corner radius so the edges line up. -->
+    <dimen name="widget_radius">@android:dimen/system_app_widget_background_radius</dimen>
+    <dimen name="widget_padding">16dp</dimen>
+    <dimen name="widget_bar_radius">4dp</dimen>
+</resources>

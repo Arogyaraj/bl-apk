@@ -35,7 +35,7 @@ class NativeBridge(private val context: Context) {
     fun updateWidget(json: String): Boolean {
         return try {
             WidgetStore.save(context, json)
-            BucketWidget.updateAll(context)
+            WidgetUpdater.updateAll(context)
             true
         } catch (e: Exception) {
             false

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Corner radius on Android 11 and older. Android 12+ uses the system radius (values-v31). -->
+    <dimen name="widget_radius">20dp</dimen>
+    <!-- Content inset from the widget edge, 16dp as in the Material widget guidance. -->
+    <dimen name="widget_padding">16dp</dimen>
+    <!-- Progress bars use a small radius so they sit comfortably inside the rounded frame. -->
+    <dimen name="widget_bar_radius">4dp</dimen>
+</resources>

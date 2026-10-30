@@ -1,5 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Bucket List</string>
-    <string name="widget_label">Bucket List</string>
-    <string name="widget_description">Your progress and the next dream to work on.</string>
+    <string name="widget_progress_label">Progress</string>
+    <string name="widget_progress_description">How many dreams you have finished, at a glance.</string>
+    <string name="widget_next_label">Next up</string>
+    <string name="widget_next_description">The next dream to work on, with its date.</string>
+    <string name="widget_coming_label">Coming up</string>
+    <string name="widget_coming_description">Your next three dated dreams.</string>
+    <string name="widget_goal_label">Yearly goal</string>
+    <string name="widget_goal_description">Progress toward this year\'s goal.</string>
+    <string name="widget_countdown_label">Countdown</string>
+    <string name="widget_countdown_description">Days until your nearest dated dream.</string>
 </resources>

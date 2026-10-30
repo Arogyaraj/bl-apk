@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="@dimen/widget_padding">
+
+    <TextView android:id="@+id/w_kicker" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:fontFamily="monospace" android:letterSpacing="0.12" android:text="YEARLY GOAL"
+        android:textColor="@color/bl_muted" android:textSize="10sp" />
+    <TextView android:id="@+id/w_value" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" android:fontFamily="sans-serif-black" android:maxLines="1"
+        android:text="0 / 0" android:textColor="@color/bl_ink" android:textSize="26sp" />
+    <TextView android:id="@+id/w_sub" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:maxLines="1" android:text="Set one in your profile" android:textColor="@color/bl_muted" android:textSize="12sp" />
+    <ProgressBar android:id="@+id/w_bar" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="8dp" android:layout_marginTop="10dp"
+        android:indeterminate="false" android:max="1" android:progress="0"
+        android:progressDrawable="@drawable/widget_progress" />
+</LinearLayout>

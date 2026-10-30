@@ -649,24 +649,37 @@ function widgetTitles() { return localStorage.getItem("bl-widget-titles") !== "0
 function renderWidgetToggle() {
   $("widgetToggle").textContent = "◧ Widget names: " + (widgetTitles() ? "on" : "off");
 }
+/* Everything the home screen widgets show, computed from the list the app already has */
+function widgetSnapshot(show) {
+  const todayStart = new Date(new Date().toDateString()).getTime();
+  const daysUntil = (iso) => Math.round((new Date(iso + "T00:00") - todayStart) / 864e5);
+  const open = dreams.filter((d) => !d.done);
+  const dated = open.filter((d) => d.date).sort((a, b) => a.date.localeCompare(b.date));
+  const pick = dated[0] || open.find((d) => d.pinned) || open[0] || null;
+  const year = new Date().getFullYear();
+  const doneYear = dreams.filter((d) => d.done && d.completedAt && new Date(d.completedAt).getFullYear() === year).length;
+  const named = (d) => (show ? d.title : "");
+  return {
+    total: dreams.length,
+    done: dreams.length - open.length,
+    showTitles: show,
+    next: pick ? {
+      title: show ? pick.title : "",
+      meta: pick.date ? `${fmtDate(pick.date)} · ${countdown(pick.date)}` : pick.category
+    } : null,
+    upcoming: dated.slice(0, 3).map((d) => ({ title: named(d), meta: `${fmtDate(d.date)} · ${countdown(d.date)}` })),
+    goal: profile.goal ? { year, done: doneYear, target: profile.goal } : null,
+    countdown: dated[0] ? { title: named(dated[0]), days: daysUntil(dated[0].date) } : null
+  };
+}
+
+
 function publishWidget() {
   if (!(window.AndroidBridge && AndroidBridge.updateWidget)) return;
   clearTimeout(widgetTimer);
   widgetTimer = setTimeout(() => {
     if (loading || !pin) return;
-    const open = dreams.filter((d) => !d.done);
-    const dated = open.filter((d) => d.date).sort((a, b) => a.date.localeCompare(b.date));
-    const pick = dated[0] || open.find((d) => d.pinned) || open[0] || null;
-    const show = widgetTitles();
-    AndroidBridge.updateWidget(JSON.stringify({
-      total: dreams.length,
-      done: dreams.length - open.length,
-      showTitles: show,
-      next: pick ? {
-        title: show ? pick.title : "",
-        meta: pick.date ? `${fmtDate(pick.date)} · ${countdown(pick.date)}` : pick.category
-      } : null
-    }));
+    AndroidBridge.updateWidget(JSON.stringify(widgetSnapshot(widgetTitles())));
   }, 300);
 }
 

@@ -39,11 +39,18 @@ Edit the web files in the `bucketlist` project, then run `python3 android/sync-w
 - `app/src/main/assets/`: the web app (synced from the `bucketlist` project)
 - `app/src/main/AndroidManifest.xml`: app name, icon, permissions
 
-## Home screen widget
+## Home screen widgets
 
-Add it by long-pressing the home screen, choosing **Widgets**, and dragging **Bucket List** onto a page. It shows how many dreams are done, a progress bar, and the next dream to work on. Tapping it opens the app.
+Long-press the home screen, choose **Widgets**, and look for **Bucket List**. There are five widgets:
 
-- The widget updates whenever the list changes in the app.
-- It keeps its last picture when the app is closed.
-- Menu → **Widget names: on/off** hides dream names on the home screen. Names are never sent to the widget when hidden.
-- Erasing the list clears the widget.
+- **Progress** (2×2): dreams finished out of all dreams, with a bar.
+- **Next up** (2×1): the next dream to work on and its date.
+- **Coming up** (2×2): the next three dated dreams.
+- **Yearly goal** (2×1): progress toward the goal set in your profile.
+- **Countdown** (2×2): days until your nearest dated dream.
+
+Each widget matches the app's black-and-white design. Corners follow Material guidance: on Android 12 and newer they use the system's widget corner radius, and older versions use a 20dp radius.
+
+- Widgets update whenever the list changes in the app, and keep their last picture when the app is closed.
+- Menu → **Widget names: on/off** hides dream names on every widget.
+- Erasing the list clears the widgets.

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="@dimen/widget_padding">
+
+    <TextView android:id="@+id/w_kicker" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:fontFamily="monospace" android:letterSpacing="0.12" android:text="COMING UP"
+        android:textColor="@color/bl_muted" android:textSize="10sp" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:orientation="vertical">
+        <TextView android:id="@+id/w_t0" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1"
+            android:textColor="@color/bl_ink" android:textSize="14sp" />
+        <TextView android:id="@+id/w_m0" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:maxLines="1" android:textColor="@color/bl_muted" android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:orientation="vertical">
+        <TextView android:id="@+id/w_t1" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1"
+            android:textColor="@color/bl_ink" android:textSize="14sp" />
+        <TextView android:id="@+id/w_m1" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:maxLines="1" android:textColor="@color/bl_muted" android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:orientation="vertical">
+        <TextView android:id="@+id/w_t2" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1"
+            android:textColor="@color/bl_ink" android:textSize="14sp" />
+        <TextView android:id="@+id/w_m2" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:maxLines="1" android:textColor="@color/bl_muted" android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>

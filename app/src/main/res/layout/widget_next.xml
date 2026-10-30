@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="@dimen/widget_padding">
+
+    <TextView android:id="@+id/w_kicker" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:fontFamily="monospace" android:letterSpacing="0.12" android:text="NEXT UP"
+        android:textColor="@color/bl_muted" android:textSize="10sp" />
+    <TextView android:id="@+id/w_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" android:ellipsize="end" android:fontFamily="sans-serif-black"
+        android:maxLines="2" android:text="Your list is waiting" android:textColor="@color/bl_ink" android:textSize="18sp" />
+    <TextView android:id="@+id/w_meta" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1"
+        android:text="Tap to open Bucket List" android:textColor="@color/bl_muted" android:textSize="12sp" />
+</LinearLayout>

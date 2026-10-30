@@ -23,15 +23,53 @@
         </activity>
 
         <receiver
-            android:name=".BucketWidget"
+            android:name=".ProgressWidget"
             android:exported="true"
-            android:label="@string/widget_label">
+            android:label="@string/widget_progress_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/bucket_widget_info" />
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info_progress" />
+        </receiver>
+
+        <receiver
+            android:name=".NextUpWidget"
+            android:exported="true"
+            android:label="@string/widget_next_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info_next" />
+        </receiver>
+
+        <receiver
+            android:name=".ComingUpWidget"
+            android:exported="true"
+            android:label="@string/widget_coming_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info_coming" />
+        </receiver>
+
+        <receiver
+            android:name=".GoalWidget"
+            android:exported="true"
+            android:label="@string/widget_goal_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info_goal" />
+        </receiver>
+
+        <receiver
+            android:name=".CountdownWidget"
+            android:exported="true"
+            android:label="@string/widget_countdown_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info_countdown" />
         </receiver>
     </application>
 
