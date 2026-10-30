@@ -644,7 +644,34 @@ function renderBulk() {
   $("bulkCount").textContent = `${selected.size} selected`;
 }
 
+let widgetTimer = null;
+function widgetTitles() { return localStorage.getItem("bl-widget-titles") !== "0"; }
+function renderWidgetToggle() {
+  $("widgetToggle").textContent = "◧ Widget names: " + (widgetTitles() ? "on" : "off");
+}
+function publishWidget() {
+  if (!(window.AndroidBridge && AndroidBridge.updateWidget)) return;
+  clearTimeout(widgetTimer);
+  widgetTimer = setTimeout(() => {
+    if (loading || !pin) return;
+    const open = dreams.filter((d) => !d.done);
+    const dated = open.filter((d) => d.date).sort((a, b) => a.date.localeCompare(b.date));
+    const pick = dated[0] || open.find((d) => d.pinned) || open[0] || null;
+    const show = widgetTitles();
+    AndroidBridge.updateWidget(JSON.stringify({
+      total: dreams.length,
+      done: dreams.length - open.length,
+      showTitles: show,
+      next: pick ? {
+        title: show ? pick.title : "",
+        meta: pick.date ? `${fmtDate(pick.date)} · ${countdown(pick.date)}` : pick.category
+      } : null
+    }));
+  }, 300);
+}
+
 function render() {
+  publishWidget();
   renderHeader();
   renderHero();
   renderNext();
@@ -965,7 +992,7 @@ $("profPhotoInput").addEventListener("change", async (e) => {
 $("profRemove").onclick = () => { profPhoto = ""; renderProfPreview(""); };
 
 /* ---------- Menu: backup, export, erase ---------- */
-$("menuBtn").onclick = () => $("menuDlg").showModal();
+$("menuBtn").onclick = () => { renderWidgetToggle(); $("menuDlg").showModal(); };
 document.querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => runMenu(b.dataset.m)));
 
 function runMenu(m) {
@@ -974,6 +1001,12 @@ function runMenu(m) {
   if (m === "csv") exportCSV();
   if (m === "import") $("importFile").click();
   if (m === "pin") $("pinDlg").showModal();
+  if (m === "widget") {
+    localStorage.setItem("bl-widget-titles", widgetTitles() ? "0" : "1");
+    renderWidgetToggle();
+    publishWidget();
+    toast(widgetTitles() ? "Widget shows dream names" : "Widget hides dream names");
+  }
   if (m === "erase") eraseAll();
 }
 

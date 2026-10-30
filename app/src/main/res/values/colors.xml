@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bl_ink">#FF000000</color>
+    <color name="bl_paper">#FFFFFFFF</color>
+    <color name="bl_muted">#FF6B6B6B</color>
+    <color name="bl_soft">#FFE6E6E6</color>
+</resources>

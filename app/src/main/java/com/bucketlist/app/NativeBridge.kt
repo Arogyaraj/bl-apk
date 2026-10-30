@@ -6,8 +6,9 @@ import android.provider.MediaStore
 import android.webkit.JavascriptInterface
 
 /**
- * Lets the web app save backups and exports to the device's Downloads folder.
- * Called from JavaScript as AndroidBridge.saveFile(name, mimeType, content).
+ * Methods the web app can call through window.AndroidBridge:
+ *  - saveFile(name, mimeType, content): saves an export to Downloads
+ *  - updateWidget(json): stores the snapshot and redraws the home screen widget
  */
 class NativeBridge(private val context: Context) {
 
@@ -24,6 +25,17 @@ class NativeBridge(private val context: Context) {
             resolver.openOutputStream(uri)?.use { it.write(content.toByteArray(Charsets.UTF_8)) } ?: return false
             val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
             resolver.update(uri, done, null, null)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun updateWidget(json: String): Boolean {
+        return try {
+            WidgetStore.save(context, json)
+            BucketWidget.updateAll(context)
             true
         } catch (e: Exception) {
             false

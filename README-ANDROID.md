@@ -38,3 +38,12 @@ Edit the web files in the `bucketlist` project, then run `python3 android/sync-w
 - `app/src/main/java/com/bucketlist/app/NativeBridge.kt`: saves exports to Downloads
 - `app/src/main/assets/`: the web app (synced from the `bucketlist` project)
 - `app/src/main/AndroidManifest.xml`: app name, icon, permissions
+
+## Home screen widget
+
+Add it by long-pressing the home screen, choosing **Widgets**, and dragging **Bucket List** onto a page. It shows how many dreams are done, a progress bar, and the next dream to work on. Tapping it opens the app.
+
+- The widget updates whenever the list changes in the app.
+- It keeps its last picture when the app is closed.
+- Menu → **Widget names: on/off** hides dream names on the home screen. Names are never sent to the widget when hidden.
+- Erasing the list clears the widget.
