@@ -1,0 +1,1296 @@
+/* Bucket List v2 client. Every change is saved to Neon Postgres through /api. */
+const CATS = ["Travel","Adventure","Learning","Health","Career","Creative","Food","Experiences","Other"];
+const CAT_EMOJI = { Travel:"✈️", Adventure:"🏔️", Learning:"📚", Health:"💪", Career:"💼", Creative:"🎨", Food:"🍜", Experiences:"🎉", Other:"⭐" };
+const PRIO = { high: 0, medium: 1, low: 2 };
+const KIND = {
+  created: ["➕", "Added"], completed: ["🎉", "Completed"], reopened: ["↩️", "Reopened"],
+  updated: ["✏️", "Edited"], memory: ["📝", "Memory added"], deleted: ["🗑️", "Deleted"]
+};
+const EMOJI_PRESETS = ["🌍","🏔️","🎸","🍣","🏋️","📚","🎨","🚀","🌅","💃","🐠","🎬","🏄","🎂","🛫","🧗"];
+const IDEAS = [
+  "Watch the sunrise from a mountain", "Cook one dish from every continent",
+  "Take a solo road trip", "Go stargazing somewhere really dark",
+  "Learn to surf", "Write a short story and finish it"
+];
+const PIN_KEY = "bl-pin";
+const MODE_KEY = "bl-mode";
+const LEGACY_KEYS = ["bucketlist-v3", "bucketlist-v2"];
+const DEFAULT_PROFILE = { name: "Your Name", tagline: "", photo: "", goal: 0 };
+const LOCAL = location.hostname === "appassets.androidplatform.net" || new URLSearchParams(location.search).has("local");
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtDate = (d) => new Date(d + "T00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+const fmtDay = (ts) => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const monthLabel = (ts) => new Date(ts).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+const localIso = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const dateStamp = () => localIso();
+const fail = (code, message) => Object.assign(new Error(message), { code });
+const starStr = (n) => "★".repeat(n) + "☆".repeat(5 - n);
+const dreamUrl = (id) => `/api/dreams?id=${encodeURIComponent(id)}`;
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? "Late night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
+function countdown(d) {
+  if (!d) return "";
+  const today = new Date(new Date().toDateString()).getTime();
+  const diff = Math.round((new Date(d + "T00:00") - today) / 864e5);
+  if (diff < 0) return `Overdue by ${-diff}d`;
+  if (diff === 0) return "Today!";
+  return `${diff}d left`;
+}
+
+function timeAgo(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  const days = Math.round(h / 24);
+  return days < 7 ? `${days} d ago` : fmtDay(ts);
+}
+
+function cleanUrl(s) {
+  s = String(s || "").trim();
+  if (!s) return "";
+  try {
+    const u = new URL(/^https?:\/\//i.test(s) ? s : "https://" + s);
+    return ["http:", "https:"].includes(u.protocol) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/* ---------- State ---------- */
+let pin = sessionStorage.getItem(PIN_KEY) || "";
+let profile = { ...DEFAULT_PROFILE };
+let dreams = [];
+let activity = [];
+let stats = null;
+let currentTab = "dreams";
+let filter = { cat: "All", tag: "", prio: "all", status: "all", q: "", sort: "priority", view: "grid" };
+let selecting = false;
+const selected = new Set();
+let editing = null;
+let pendingPhoto;
+let profPhoto;
+let inFlight = 0;
+let online = true;
+let nextId = null;
+let journalFilter = "all";
+let loading = false;
+
+/* ---------- Network ---------- */
+function setSync() {
+  const el = $("sync");
+  if (!online) { el.className = "sync error"; el.textContent = "Offline"; }
+  else if (inFlight) { el.className = "sync saving"; el.textContent = "Saving…"; }
+  else { el.className = "sync saved"; el.textContent = "Saved"; }
+}
+
+async function localCall(method, path, body, pinValue) {
+  const mutating = method !== "GET";
+  if (mutating) { inFlight++; setSync(); }
+  try {
+    const out = await LocalAPI.call(method, path, body, pinValue);
+    online = true;
+    return out;
+  } catch (err) {
+    throw fail(err.code || 500, err.message || "Something went wrong");
+  } finally {
+    if (mutating) { inFlight--; setSync(); }
+  }
+}
+
+async function call(method, path, body, pinValue = pin) {
+  if (LOCAL) return localCall(method, path, body, pinValue);
+  const mutating = method !== "GET";
+  if (mutating) { inFlight++; setSync(); }
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: { "Content-Type": "application/json", "x-pin": pinValue },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: "no-store"
+    });
+    online = true;
+  } catch {
+    online = false;
+    throw fail(0, "Can't reach the server. Check your connection.");
+  } finally {
+    if (mutating) { inFlight--; setSync(); }
+  }
+  if (res.status === 401) throw fail(401, "Wrong PIN");
+  if (res.status === 429) throw fail(429, "Too many attempts. Wait 15 minutes.");
+  if (res.status === 413) throw fail(413, "Too large to save. Remove a few photos.");
+  if (!res.ok) {
+    let msg = "Server error";
+    try { msg = (await res.json()).error || msg; } catch {}
+    throw fail(res.status, msg);
+  }
+  return res.json();
+}
+
+function toast(msg, action) {
+  $("toastMsg").textContent = msg;
+  const b = $("toastAct");
+  if (action) {
+    b.textContent = action.label;
+    b.classList.remove("hide");
+    b.onclick = () => { $("toast").classList.remove("show"); action.run(); };
+  } else {
+    b.classList.add("hide");
+    b.onclick = null;
+  }
+  $("toast").classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => $("toast").classList.remove("show"), action ? 5000 : 2400);
+}
+
+const findDream = (id) => dreams.find((d) => d.id === id);
+
+function replaceDream(row) {
+  const i = dreams.findIndex((d) => d.id === row.id);
+  if (i >= 0) dreams[i] = row;
+  else dreams.unshift(row);
+}
+
+async function refresh() {
+  const data = await call("GET", "/api/data");
+  profile = { ...DEFAULT_PROFILE, ...data.profile };
+  dreams = data.dreams;
+  activity = data.activity;
+  render();
+}
+
+/* ---------- Dream operations ---------- */
+async function createDream(data) {
+  try {
+    const row = await call("POST", "/api/dreams", data);
+    dreams.unshift(row);
+    render();
+    toast("Dream added ✨");
+    return row;
+  } catch (err) {
+    toast(err.message);
+    return null;
+  }
+}
+
+async function patchDream(d, fields) {
+  const before = { ...d };
+  Object.assign(d, fields);
+  render();
+  try {
+    replaceDream(await call("PATCH", dreamUrl(d.id), fields));
+    render();
+    return true;
+  } catch (err) {
+    Object.assign(d, before);
+    render();
+    toast(err.message);
+    return false;
+  }
+}
+
+async function toggleDone(d) {
+  const done = !d.done;
+  const ok = await patchDream(d, { done, rating: done ? d.rating : null });
+  if (ok && done) toast("🎉 One more dream checked off!", { label: "Rate & remember", run: () => { const it = findDream(d.id); if (it) openItem(it); } });
+}
+
+async function duplicate(d) {
+  try {
+    dreams.unshift(await call("POST", "/api/dreams", { duplicateOf: d.id }));
+    render();
+    toast("Duplicated");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function deleteDream(d) {
+  const idx = dreams.indexOf(d);
+  dreams.splice(idx, 1);
+  selected.delete(d.id);
+  render();
+  try {
+    await call("DELETE", dreamUrl(d.id));
+  } catch (err) {
+    dreams.splice(idx, 0, d);
+    render();
+    toast(err.message);
+    return;
+  }
+  toast(`Deleted “${d.title}”`, {
+    label: "Undo",
+    run: async () => {
+      try {
+        const row = await call("POST", "/api/dreams", { ...d });
+        dreams.splice(Math.min(idx, dreams.length), 0, row);
+        render();
+      } catch (err) {
+        toast(err.message);
+      }
+    }
+  });
+}
+
+async function bulk(action) {
+  if (action === "cancel") return setSelecting(false);
+  const targets = [...selected].map(findDream).filter(Boolean);
+  if (!targets.length) return;
+  if (action === "delete" && !confirm(`Delete ${targets.length} dream${targets.length > 1 ? "s" : ""}?`)) return;
+  try {
+    if (action === "delete") {
+      await Promise.all(targets.map((d) => call("DELETE", dreamUrl(d.id))));
+      toast(`Deleted ${targets.length}`);
+    } else if (action === "done") {
+      await Promise.all(targets.filter((d) => !d.done).map((d) => call("PATCH", dreamUrl(d.id), { done: true })));
+      toast(`Marked ${targets.length} done 🎉`);
+    } else if (action === "pin") {
+      await Promise.all(targets.map((d) => call("PATCH", dreamUrl(d.id), { pinned: true })));
+      toast(`Pinned ${targets.length} ★`);
+    }
+    setSelecting(false);
+    await refresh();
+  } catch (err) {
+    toast(err.message);
+    await refresh().catch(() => {});
+  }
+}
+
+/* ---------- Selection ---------- */
+function setSelecting(on) {
+  selecting = on;
+  if (!on) selected.clear();
+  $("selectBtn").classList.toggle("on", on);
+  render();
+}
+
+function toggleSelect(id) {
+  if (selected.has(id)) selected.delete(id);
+  else selected.add(id);
+  render();
+}
+
+/* ---------- Rendering ---------- */
+function renderHeader() {
+  $("hello").textContent = greeting() + ",";
+  $("name").textContent = profile.name || "Your Name";
+  $("tagline").textContent = profile.tagline || "Things I want to do before I run out of time";
+  const initials = (profile.name || "?").trim().split(/\s+/).map((w) => w[0] || "").slice(0, 2).join("").toUpperCase() || "?";
+  $("avatar").innerHTML = profile.photo ? `<img src="${esc(profile.photo)}" alt="">` : esc(initials);
+  document.title = `${profile.name || "My"}'s Bucket List`;
+}
+
+function renderHero() {
+  const total = dreams.length;
+  const done = dreams.filter((d) => d.done).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  $("sTotal").textContent = total;
+  $("sDone").textContent = done;
+  $("sLeft").textContent = total - done;
+  $("ringPct").textContent = pct + "%";
+  const C = 2 * Math.PI * 52;
+  $("ringFill").style.strokeDasharray = C;
+  $("ringFill").style.strokeDashoffset = C * (1 - pct / 100);
+
+  const year = new Date().getFullYear();
+  const doneYear = dreams.filter((d) => d.done && d.completedAt && new Date(d.completedAt).getFullYear() === year).length;
+  const goal = profile.goal || 0;
+  $("goal").classList.toggle("hide", !goal);
+  if (goal) {
+    $("goalLabel").textContent = `${year} goal`;
+    $("goalTxt").textContent = `${doneYear} / ${goal}`;
+    $("goalFill").style.width = Math.min(100, (doneYear / goal) * 100) + "%";
+  }
+}
+
+function renderNext() {
+  const open = dreams.filter((d) => !d.done);
+  const dated = open.filter((d) => d.date).sort((a, b) => a.date.localeCompare(b.date));
+  const pick = dated[0] || open.find((d) => d.pinned) || open[0];
+  const btn = $("nextUp");
+  btn.classList.toggle("hide", !dreams.length);
+  if (!pick) {
+    btn.innerHTML = `<span class="muted">Everything on your list is done. Time to dream bigger.</span>`;
+    nextId = null;
+    return;
+  }
+  nextId = pick.id;
+  btn.innerHTML = `<span class="muted">Next up</span>
+    <strong>${pick.emoji || CAT_EMOJI[pick.category] || "⭐"} ${esc(pick.title)}</strong>
+    <span class="muted">${pick.date ? `${fmtDate(pick.date)} · ${countdown(pick.date)}` : "No target date yet. Tap to plan it."}</span>`;
+}
+
+function renderCats() {
+  const counts = {};
+  dreams.forEach((d) => (counts[d.category] = (counts[d.category] || 0) + 1));
+  if (filter.cat !== "All" && !counts[filter.cat]) filter.cat = "All";
+  const cats = [...new Set([...CATS, ...Object.keys(counts)])].filter((c) => counts[c]);
+  const chips = [["All", dreams.length], ...cats.map((c) => [c, counts[c]])];
+  $("cats").innerHTML = chips.map(([c, n]) =>
+    `<button class="chip ${filter.cat === c ? "on" : ""}" data-c="${esc(c)}">${c !== "All" ? CAT_EMOJI[c] + " " : ""}${esc(c)} <span style="opacity:.6">${n}</span></button>`
+  ).join("");
+}
+
+function renderTags() {
+  const counts = {};
+  dreams.forEach((d) => d.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
+  const tags = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 24);
+  if (filter.tag && !counts[filter.tag]) filter.tag = "";
+  $("tagChips").classList.toggle("hide", !tags.length);
+  $("tagChips").innerHTML = tags.map(([t, n]) =>
+    `<button class="chip tag ${filter.tag === t ? "on" : ""}" data-tag="${esc(t)}">#${esc(t)} <span style="opacity:.6">${n}</span></button>`
+  ).join("");
+}
+
+function renderToolbar() {
+  document.querySelectorAll("#status [data-s]").forEach((b) => b.classList.toggle("on", b.dataset.s === filter.status));
+  document.querySelectorAll("[data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === filter.view));
+  $("prio").value = filter.prio;
+  $("sort").value = filter.sort;
+  $("selectBtn").classList.toggle("on", selecting);
+}
+
+function statusOk(d) {
+  if (filter.status === "done") return d.done;
+  if (filter.status === "todo") return !d.done;
+  if (filter.status === "overdue") return !d.done && !!d.date && d.date < localIso();
+  return true;
+}
+
+function visible() {
+  const q = filter.q;
+  const arr = dreams.filter((d) =>
+    (filter.cat === "All" || d.category === filter.cat) &&
+    (!filter.tag || d.tags.includes(filter.tag)) &&
+    (filter.prio === "all" || d.priority === filter.prio) &&
+    statusOk(d) &&
+    (!q || [d.title, d.notes, d.location, d.category, ...d.tags].join(" ").toLowerCase().includes(q))
+  );
+  arr.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    if (filter.sort === "date") return (a.date || "9999").localeCompare(b.date || "9999");
+    if (filter.sort === "added") return b.added - a.added;
+    if (filter.sort === "name") return a.title.localeCompare(b.title);
+    return (PRIO[a.priority] ?? 1) - (PRIO[b.priority] ?? 1);
+  });
+  return arr;
+}
+
+function coverHTML(d) {
+  if (d.photo) return `<div class="cover"><img src="${esc(d.photo)}" alt="" loading="lazy"></div>`;
+  const pat = "pat-" + (Math.max(0, CATS.indexOf(d.category)) % 5);
+  return `<div class="cover ${pat}"><span class="sticker">${esc(d.emoji || CAT_EMOJI[d.category] || "⭐")}</span></div>`;
+}
+
+function card(d) {
+  const steps = d.steps || [];
+  const stepsDone = steps.filter((s) => s.done).length;
+  const cd = d.done ? "" : countdown(d.date);
+  const isSel = selected.has(d.id);
+  const topLeft = selecting
+    ? `<span class="sel-box ${isSel ? "on" : ""}" aria-hidden="true">${isSel ? "✓" : ""}</span>`
+    : `<button class="pin ${d.pinned ? "on" : ""}" data-act="pin" aria-label="${d.pinned ? "Unpin" : "Pin to top"}">★</button>`;
+  const actions = selecting ? "" : `<div class="item-actions">
+      <button class="ibtn" data-act="dup" aria-label="Duplicate" title="Duplicate">⧉</button>
+      <button class="ibtn" data-act="del" aria-label="Delete" title="Delete">✕</button>
+    </div>`;
+  return `
+  <article class="item ${d.done ? "done" : ""} ${isSel ? "sel-on" : ""}" data-id="${d.id}">
+    ${coverHTML(d)}
+    ${topLeft}
+    ${actions}
+    <div class="body">
+      <div class="row1">
+        <button class="check" data-act="toggle" aria-label="${d.done ? "Mark as not done" : "Mark as done"}">${d.done ? "✓" : ""}</button>
+        <h3 class="title">${esc(d.title)}</h3>
+      </div>
+      <div class="meta">
+        <span class="tag-pill">${esc(d.category)}</span>
+        <span class="prio-${esc(d.priority)}">● ${esc(d.priority)}</span>
+        ${d.date ? `<span>📅 ${fmtDate(d.date)}</span>` : ""}
+        ${cd ? `<span class="cd">${cd}</span>` : ""}
+        ${d.location ? `<span>📍 ${esc(d.location)}</span>` : ""}
+        ${d.budget ? `<span>💰 ${esc(d.budget)}</span>` : ""}
+        ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">🔗 Link</a>` : ""}
+      </div>
+      ${d.done && d.rating ? `<div class="stars-view" aria-label="${d.rating} of 5">${starStr(d.rating)}</div>` : ""}
+      ${steps.length ? `<div class="steps-wrap"><div class="steps-bar"><i style="width:${(stepsDone / steps.length) * 100}%"></i></div>
+        <p class="muted steps-note">${stepsDone}/${steps.length} steps</p></div>` : ""}
+      ${d.tags.length ? `<div class="tags">${d.tags.map((t) => `<span>#${esc(t)}</span>`).join("")}</div>` : ""}
+      ${d.notes ? `<p class="notes">${esc(d.notes)}</p>` : ""}
+    </div>
+  </article>`;
+}
+
+function renderTimeline(arr) {
+  const dated = arr.filter((d) => d.date).sort((a, b) => a.date.localeCompare(b.date));
+  const undated = arr.filter((d) => !d.date);
+  const groups = {};
+  dated.forEach((d) => {
+    const k = d.date.slice(0, 7);
+    (groups[k] = groups[k] || []).push(d);
+  });
+  const parts = Object.keys(groups).map((k) => {
+    const [y, m] = k.split("-");
+    const label = new Date(+y, +m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    return `<h3 class="month">${label}</h3>${groups[k].map(card).join("")}`;
+  });
+  if (undated.length) parts.push(`<h3 class="month">Someday</h3>${undated.map(card).join("")}`);
+  return parts.join("");
+}
+
+function renderList() {
+  const list = $("list");
+  if (loading) {
+    list.className = "list";
+    list.innerHTML = Array.from({ length: 3 }, () => `<div class="skel" aria-hidden="true"></div>`).join("");
+    return;
+  }
+  const arr = visible();
+  list.className = "list" + (filter.view !== "grid" ? " list-view" : "");
+  if (!arr.length) {
+    list.innerHTML = dreams.length
+      ? `<div class="empty">Nothing matches these filters.</div>`
+      : `<div class="empty">
+          <div class="empty-emoji">✨</div>
+          <h3>Your list is empty</h3>
+          <p class="muted">Start with something you've always wanted to do, or tap an idea:</p>
+          <div class="idea-chips">${IDEAS.map((t) => `<button class="chip" data-idea="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+        </div>`;
+    return;
+  }
+  list.innerHTML = filter.view === "timeline" ? renderTimeline(arr) : arr.map(card).join("");
+}
+
+function groupByMonth(arr, tsOf) {
+  const groups = {};
+  arr.forEach((x) => {
+    const k = monthLabel(tsOf(x) || Date.now());
+    (groups[k] = groups[k] || []).push(x);
+  });
+  return Object.entries(groups);
+}
+
+function journalEntry(d) {
+  const dt = new Date(d.completedAt || Date.now());
+  const cat = `${d.emoji || CAT_EMOJI[d.category] || "⭐"} ${esc(d.category)}`;
+  return `<li class="tl-item">
+    <div class="tl-date"><b>${dt.getDate()}</b><span>${dt.toLocaleDateString(undefined, { month: "short" })}</span></div>
+    <article class="tl-card" data-id="${d.id}">
+      <div class="tl-top"><span class="mono">${cat}</span>${d.rating ? `<span class="stars-view tl-stars" aria-label="${d.rating} of 5">${starStr(d.rating)}</span>` : ""}</div>
+      <h4 class="tl-title">${esc(d.title)}</h4>
+      ${d.photo ? `<img class="tl-photo" src="${esc(d.photo)}" alt="" loading="lazy">` : ""}
+      ${d.memory
+        ? `<blockquote class="tl-quote">${esc(d.memory)}</blockquote>`
+        : `<button class="linkish" data-act="memory">Write the memory →</button>`}
+    </article>
+  </li>`;
+}
+
+function renderJournal() {
+  const done = dreams.filter((d) => d.done).sort((a, b) => b.completedAt - a.completedAt);
+  const remembered = done.filter((d) => d.memory).length;
+  const rated = done.filter((d) => d.rating);
+  const avg = rated.length ? (rated.reduce((sum, d) => sum + d.rating, 0) / rated.length).toFixed(1) : "—";
+  $("jStats").innerHTML = `
+    <div><b>${done.length}</b><span>Finished</span></div>
+    <div><b>${remembered}</b><span>Remembered</span></div>
+    <div><b>${avg}</b><span>Avg rating</span></div>`;
+  document.querySelectorAll("#jFilter [data-jf]").forEach((b) => b.classList.toggle("on", b.dataset.jf === journalFilter));
+
+  const shown = done.filter((d) =>
+    journalFilter === "all" || (journalFilter === "remembered" ? !!d.memory : !d.memory)
+  );
+  if (!done.length) {
+    $("memories").innerHTML = `<div class="empty">Finish a dream and it lands here, with room for a memory.</div>`;
+  } else if (!shown.length) {
+    $("memories").innerHTML = `<div class="empty">Nothing in this view yet.</div>`;
+  } else {
+    $("memories").innerHTML = groupByMonth(shown, (d) => d.completedAt).map(([label, arr]) => `
+      <section class="j-month">
+        <h3 class="j-label"><span>${label}</span><span>${arr.length} ${arr.length === 1 ? "entry" : "entries"}</span></h3>
+        <ol class="tl">${arr.map(journalEntry).join("")}</ol>
+      </section>`).join("");
+  }
+
+  $("feed").innerHTML = activity.length
+    ? activity.map((a) => {
+        const [ico, label] = KIND[a.kind] || ["•", a.kind];
+        return `<div class="feed-item">
+          <span class="feed-ico">${ico}</span>
+          <div><strong>${label}</strong> ${esc(a.title)}<div class="muted">${timeAgo(a.at)}</div></div>
+        </div>`;
+      }).join("")
+    : `<div class="empty">No activity yet.</div>`;
+}
+
+function brow(label, value, total, max) {
+  const outer = max ? (total / max) * 100 : 0;
+  const inner = total ? (value / total) * 100 : 0;
+  return `<div class="brow">
+    <span>${label}</span>
+    <div class="bar"><em style="width:${outer}%"><i style="width:${inner}%"></i></em></div>
+    <b>${value}</b>
+  </div>`;
+}
+
+function renderStats() {
+  const total = dreams.length;
+  const done = dreams.filter((d) => d.done).length;
+  const open = total - done;
+  const year = new Date().getFullYear();
+  const doneYear = dreams.filter((d) => d.done && d.completedAt && new Date(d.completedAt).getFullYear() === year).length;
+  $("statsSummary").innerHTML = `
+    <div><b>${total}</b><span>Dreams</span></div>
+    <div><b>${done}</b><span>Done</span></div>
+    <div><b>${open}</b><span>Open</span></div>`;
+
+  if (!stats) {
+    $("stats").innerHTML = `<div class="empty">Loading the numbers…</div>`;
+    return;
+  }
+
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const goal = profile.goal || 0;
+  const top = stats.byCategory.filter((c) => c.done > 0).sort((a, b) => b.done - a.done)[0];
+  const metrics = [
+    ["Completion", `${pct}<small>%</small>`],
+    ["Done this year", doneYear],
+    ["Avg. days to finish", stats.avgDays ?? "—"],
+    ["Avg. rating", stats.avgRating ? `${Number(stats.avgRating).toFixed(1)}<small>★</small>` : "—"],
+    ["Open", open],
+    ["Overdue", stats.overdue ?? 0],
+    ["Yearly goal", goal ? `${doneYear}<small>/ ${goal}</small>` : "—"],
+    ["Top category", top ? `${CAT_EMOJI[top.category] || "⭐"}<small>${esc(top.category)}</small>` : "—"]
+  ];
+
+  const now = new Date();
+  const months = [];
+  for (let k = 11; k >= 0; k--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    months.push({ key, label: d.toLocaleDateString(undefined, { month: "short" }), n: 0 });
+  }
+  (stats.monthly || []).forEach((m) => {
+    const x = months.find((z) => z.key === m.month);
+    if (x) x.n = m.n;
+  });
+  const monthTotal = months.reduce((sum, m) => sum + m.n, 0);
+  const maxM = Math.max(1, ...months.map((m) => m.n));
+  const maxCat = Math.max(1, ...stats.byCategory.map((c) => c.total));
+  const maxPrio = Math.max(1, ...stats.byPriority.map((p) => p.total));
+  const prio = ["high", "medium", "low"].map((k) => stats.byPriority.find((p) => p.priority === k)).filter(Boolean);
+  const ratings = [5, 4, 3, 2, 1].map((n) => ({ n, c: dreams.filter((d) => d.rating === n).length }));
+  const maxR = Math.max(1, ...ratings.map((r) => r.c));
+  const rated = ratings.reduce((sum, r) => sum + r.c, 0);
+
+  $("stats").innerHTML = `
+    <div class="metric-grid">${metrics.map(([label, val]) => `<div class="metric"><span>${label}</span><b>${val}</b></div>`).join("")}</div>
+
+    ${goal ? `<section class="goal-block">
+      <div class="goal-head"><span class="mono">${year} goal</span><b>${doneYear} / ${goal}</b></div>
+      <div class="goal-track"><i style="width:${Math.min(100, (doneYear / goal) * 100)}%"></i></div>
+    </section>` : ""}
+
+    <section class="panel-block">
+      <header class="sec-h"><h3>Completed, last 12 months</h3><span class="mono">${monthTotal} total</span></header>
+      <div class="chart">${months.map((m) => `
+        <div class="chart-col">
+          <span class="chart-val">${m.n || ""}</span>
+          <div class="chart-track"><div class="chart-fill" style="height:${(m.n / maxM) * 100}%"></div></div>
+          <small class="mono">${m.label}</small>
+        </div>`).join("")}
+      </div>
+    </section>
+
+    <div class="panel-grid">
+      <section class="panel-block">
+        <header class="sec-h"><h3>By category</h3><span class="mono">done / total</span></header>
+        ${stats.byCategory.length
+          ? stats.byCategory.map((c) => brow(`${CAT_EMOJI[c.category] || "⭐"} ${esc(c.category)}`, c.done, c.total, maxCat)).join("")
+          : `<p class="muted">No data yet.</p>`}
+      </section>
+      <section class="panel-block">
+        <header class="sec-h"><h3>By priority</h3><span class="mono">done / total</span></header>
+        ${prio.length
+          ? prio.map((p) => brow(esc(p.priority), p.done, p.total, maxPrio)).join("")
+          : `<p class="muted">No data yet.</p>`}
+      </section>
+      <section class="panel-block">
+        <header class="sec-h"><h3>Ratings</h3><span class="mono">${rated} rated</span></header>
+        ${rated
+          ? ratings.map((r) => brow(`<span class="stars-view inline">${starStr(r.n)}</span>`, r.c, r.c || 1, maxR)).join("")
+          : `<p class="muted">Rate a finished dream to see this.</p>`}
+      </section>
+    </div>`;
+}
+
+let statsTimer = null;
+function scheduleStats() {
+  clearTimeout(statsTimer);
+  statsTimer = setTimeout(loadStats, 150);
+}
+
+function renderBulk() {
+  $("bulkbar").classList.toggle("hide", !selecting);
+  $("bulkCount").textContent = `${selected.size} selected`;
+}
+
+function render() {
+  renderHeader();
+  renderHero();
+  renderNext();
+  renderCats();
+  renderTags();
+  renderToolbar();
+  renderList();
+  renderBulk();
+  if (currentTab === "journal") renderJournal();
+  if (currentTab === "stats") {
+    renderStats();
+    scheduleStats();
+  }
+}
+
+/* ---------- Tabs ---------- */
+function setTab(t) {
+  currentTab = t;
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("hide", v.id !== "view-" + t));
+  document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (t === "journal") refresh().catch((err) => toast(err.message));
+  if (t === "stats") loadStats();
+}
+
+async function loadStats() {
+  try {
+    stats = await call("GET", "/api/stats");
+    renderStats();
+  } catch (err) {
+    $("stats").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+/* ---------- Quick add, filters, lists ---------- */
+$("quickForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const title = $("quick").value.trim();
+  if (!title) return;
+  const category = filter.cat !== "All" ? filter.cat : "Other";
+  if (await createDream({ title, category })) $("quick").value = "";
+});
+
+$("cats").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-c]");
+  if (!b) return;
+  filter.cat = b.dataset.c;
+  render();
+});
+$("tagChips").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-tag]");
+  if (!b) return;
+  filter.tag = filter.tag === b.dataset.tag ? "" : b.dataset.tag;
+  render();
+});
+$("status").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-s]");
+  if (!b) return;
+  filter.status = b.dataset.s;
+  render();
+});
+$("search").addEventListener("input", (e) => {
+  filter.q = e.target.value.trim().toLowerCase();
+  renderList();
+});
+$("prio").addEventListener("change", (e) => {
+  filter.prio = e.target.value;
+  renderList();
+});
+$("sort").addEventListener("change", (e) => {
+  filter.sort = e.target.value;
+  renderList();
+});
+document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
+  filter.view = b.dataset.view;
+  render();
+}));
+$("selectBtn").addEventListener("click", () => setSelecting(!selecting));
+document.querySelectorAll("[data-bulk]").forEach((b) => b.addEventListener("click", () => bulk(b.dataset.bulk)));
+
+$("list").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return;
+  const idea = e.target.closest("[data-idea]");
+  if (idea) {
+    createDream({ title: idea.dataset.idea, category: "Experiences" });
+    return;
+  }
+  const el = e.target.closest(".item");
+  if (!el) return;
+  const d = findDream(el.dataset.id);
+  if (!d) return;
+  if (selecting) {
+    toggleSelect(d.id);
+    return;
+  }
+  const btn = e.target.closest("[data-act]");
+  const act = btn?.dataset.act;
+  if (act === "toggle") toggleDone(d);
+  else if (act === "pin") patchDream(d, { pinned: !d.pinned });
+  else if (act === "dup") duplicate(d);
+  else if (act === "del") deleteDream(d);
+  else if (!btn) openItem(d);
+});
+
+$("memories").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act='memory']");
+  const card = b && b.closest("[data-id]");
+  const d = card && findDream(card.dataset.id);
+  if (d) openItem(d);
+});
+
+$("nextUp").addEventListener("click", () => {
+  const d = findDream(nextId);
+  if (d) openItem(d);
+});
+$("fabAdd").onclick = () => openItem(null);
+document.querySelectorAll("[data-tab]").forEach((b) =>
+  b.addEventListener("click", () => setTab(b.dataset.tab))
+);
+
+/* ---------- Item dialog ---------- */
+function renderPhotoPreview(src) {
+  $("photoPrev").innerHTML = src ? `<img src="${esc(src)}" alt="">` : "No photo";
+  $("removePhoto").classList.toggle("hide", !src);
+}
+
+function renderStars() {
+  const n = Number($("ratingInput").value) || 0;
+  $("stars").innerHTML = [1, 2, 3, 4, 5].map((i) =>
+    `<button type="button" data-star="${i}" class="${i <= n ? "on" : ""}" aria-label="${i} star${i > 1 ? "s" : ""}">★</button>`
+  ).join("");
+}
+
+function syncDoneRow() {
+  $("starRow").classList.toggle("hide", !$("doneCheck").checked);
+}
+
+$("stars").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-star]");
+  if (!b) return;
+  const n = Number(b.dataset.star);
+  const cur = Number($("ratingInput").value) || 0;
+  $("ratingInput").value = cur === n ? "" : String(n);
+  renderStars();
+});
+$("doneCheck").addEventListener("change", syncDoneRow);
+
+$("emojiPresets").innerHTML = EMOJI_PRESETS.map((e) => `<button type="button" data-emo="${e}">${e}</button>`).join("");
+$("emojiPresets").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-emo]");
+  if (b) $("emojiInput").value = b.dataset.emo;
+});
+
+function openItem(d) {
+  editing = d || null;
+  pendingPhoto = undefined;
+  const f = $("itemForm");
+  f.reset();
+  $("itemTitle").textContent = d ? "Edit dream" : "New dream";
+  if (d) {
+    for (const k of ["title", "category", "priority", "date", "budget", "location", "url", "notes", "memory", "emoji"]) {
+      f.elements[k].value = d[k] || "";
+    }
+    f.elements.tags.value = d.tags.join(", ");
+    f.elements.steps.value = d.steps.map((s) => s.text).join("\n");
+    f.elements.done.checked = !!d.done;
+    $("ratingInput").value = d.rating || "";
+  } else {
+    f.elements.priority.value = "medium";
+    f.elements.category.value = filter.cat !== "All" ? filter.cat : "Other";
+    $("ratingInput").value = "";
+  }
+  renderStars();
+  syncDoneRow();
+  renderPhotoPreview(d ? d.photo : "");
+  $("deleteItemBtn").classList.toggle("hide", !d);
+  $("dupItemBtn").classList.toggle("hide", !d);
+  $("itemDlg").showModal();
+  f.elements.title.focus();
+}
+
+$("itemDlg").addEventListener("close", () => {
+  editing = null;
+  pendingPhoto = undefined;
+});
+
+$("itemForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const v = (k) => f.elements[k].value.trim();
+  const url = cleanUrl(v("url"));
+  if (url === null) {
+    toast("That link doesn't look right");
+    return;
+  }
+  const oldSteps = editing ? editing.steps : [];
+  const steps = v("steps").split("\n").map((s) => s.trim()).filter(Boolean).map((text) => {
+    const prev = oldSteps.find((s) => s.text === text);
+    return { id: prev?.id, text, done: prev ? prev.done : false };
+  });
+  const done = f.elements.done.checked;
+  const fields = {
+    title: v("title"), category: v("category"), priority: v("priority"), date: v("date") || null,
+    budget: v("budget"), location: v("location"), url, notes: v("notes"), memory: v("memory"),
+    emoji: v("emoji"),
+    tags: v("tags").split(",").map((t) => t.trim().replace(/^#/, "")).filter(Boolean),
+    steps, done,
+    rating: done ? Number($("ratingInput").value) || null : null
+  };
+  if (pendingPhoto !== undefined) fields.photo = pendingPhoto;
+
+  const target = editing;
+  try {
+    if (target) replaceDream(await call("PATCH", dreamUrl(target.id), fields));
+    else dreams.unshift(await call("POST", "/api/dreams", fields));
+    $("itemDlg").close();
+    render();
+    toast(target ? "Saved" : "Dream added ✨");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("deleteItemBtn").onclick = () => {
+  const d = editing;
+  $("itemDlg").close();
+  if (d) deleteDream(d);
+};
+$("dupItemBtn").onclick = () => {
+  const d = editing;
+  $("itemDlg").close();
+  if (d) duplicate(d);
+};
+document.querySelectorAll("[data-close]").forEach((b) =>
+  b.addEventListener("click", () => b.closest("dialog").close())
+);
+
+function compressImage(file, max = 640) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+    img.src = url;
+  });
+}
+
+$("photoInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    pendingPhoto = await compressImage(file);
+    renderPhotoPreview(pendingPhoto);
+  } catch {
+    toast("Couldn't read that image");
+  }
+});
+$("removePhoto").onclick = () => { pendingPhoto = ""; renderPhotoPreview(""); };
+
+/* ---------- Profile ---------- */
+function renderProfPreview(src) {
+  $("profPrev").innerHTML = src ? `<img src="${esc(src)}" alt="">` : "No photo";
+  $("profRemove").classList.toggle("hide", !src);
+}
+
+function openProfile() {
+  const f = $("profileForm");
+  f.reset();
+  f.elements.name.value = profile.name || "";
+  f.elements.tagline.value = profile.tagline || "";
+  f.elements.goal.value = profile.goal || "";
+  profPhoto = undefined;
+  renderProfPreview(profile.photo || "");
+  $("profileDlg").showModal();
+  f.elements.name.focus();
+}
+$("profileDlg").addEventListener("close", () => { profPhoto = undefined; });
+$("who").addEventListener("click", openProfile);
+$("avatar").addEventListener("click", openProfile);
+
+$("profileForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    name: f.elements.name.value.trim() || "Your Name",
+    tagline: f.elements.tagline.value.trim(),
+    goal: Number(f.elements.goal.value) || 0,
+    photo: profPhoto !== undefined ? profPhoto : profile.photo || ""
+  };
+  try {
+    profile = { ...DEFAULT_PROFILE, ...(await call("PUT", "/api/data", body)) };
+    $("profileDlg").close();
+    render();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+$("profPhotoInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    profPhoto = await compressImage(file, 320);
+    renderProfPreview(profPhoto);
+  } catch {
+    toast("Couldn't read that image");
+  }
+});
+$("profRemove").onclick = () => { profPhoto = ""; renderProfPreview(""); };
+
+/* ---------- Menu: backup, export, erase ---------- */
+$("menuBtn").onclick = () => $("menuDlg").showModal();
+document.querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => runMenu(b.dataset.m)));
+
+function runMenu(m) {
+  $("menuDlg").close();
+  if (m === "json") exportJSON();
+  if (m === "csv") exportCSV();
+  if (m === "import") $("importFile").click();
+  if (m === "pin") $("pinDlg").showModal();
+  if (m === "erase") eraseAll();
+}
+
+function download(name, type, content) {
+  if (window.AndroidBridge && AndroidBridge.saveFile) {
+    const ok = AndroidBridge.saveFile(name, type, content);
+    toast(ok ? "Saved to Downloads" : "Couldn't save the file");
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportJSON() {
+  download(`bucket-list-${dateStamp()}.json`, "application/json",
+    JSON.stringify({ profile, items: dreams, exportedAt: new Date().toISOString() }, null, 2));
+  toast("Backup exported");
+}
+
+function exportCSV() {
+  const cols = ["title", "category", "priority", "date", "budget", "location", "url", "tags", "notes", "done", "rating", "completed", "memory", "steps"];
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const rows = dreams.map((d) => cols.map((c) => {
+    if (c === "tags") return d.tags.join("; ");
+    if (c === "steps") return d.steps.map((s) => (s.done ? "[x] " : "[ ] ") + s.text).join("; ");
+    if (c === "done") return d.done ? "yes" : "no";
+    if (c === "completed") return d.completedAt ? new Date(d.completedAt).toISOString() : "";
+    return d[c];
+  }).map(q).join(","));
+  download(`bucket-list-${dateStamp()}.csv`, "text/csv", [cols.join(","), ...rows].join("\n"));
+  toast("Spreadsheet exported");
+}
+
+$("importFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    toast("That file isn't valid JSON");
+    return;
+  }
+  if (!data || !Array.isArray(data.items)) {
+    toast("That file isn't a valid backup");
+    return;
+  }
+  if (!confirm(`Replace your current list with ${data.items.length} dreams from this backup?`)) return;
+  try {
+    await call("POST", "/api/import", { profile: data.profile, items: data.items });
+    await refresh();
+    toast("Backup imported ✨");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+async function eraseAll() {
+  if (!confirm("Erase everything in the database? This can't be undone unless you have a backup.")) return;
+  try {
+    await call("DELETE", "/api/data");
+    await refresh();
+    toast("Everything erased");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/* ---------- Light/dark mode and install ---------- */
+function applyMode(t) { document.documentElement.dataset.theme = t; }
+function initMode() {
+  let saved = null;
+  try { saved = localStorage.getItem(MODE_KEY); } catch {}
+  applyMode(saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+}
+$("themeBtn").onclick = () => {
+  const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyMode(t);
+  try { localStorage.setItem(MODE_KEY, t); } catch {}
+};
+
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+let deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  if (LOCAL) return;
+  deferredPrompt = e;
+  $("installBtn").classList.remove("hide");
+});
+window.addEventListener("appinstalled", () => {
+  deferredPrompt = null;
+  $("installBtn").classList.add("hide");
+});
+if (isIOS && !isStandalone && !LOCAL) $("installBtn").classList.remove("hide");
+$("installBtn").onclick = async () => {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    $("installBtn").classList.add("hide");
+  } else if (isIOS) {
+    toast("Tap Share, then “Add to Home Screen”");
+  }
+};
+
+/* ---------- Keyboard shortcuts ---------- */
+/* True only when a visible text field has focus; fields inside closed dialogs never count. */
+function isTyping() {
+  const el = document.activeElement;
+  if (!el || !/INPUT|TEXTAREA|SELECT/.test(el.tagName)) return false;
+  const dlg = el.closest("dialog");
+  if (dlg && !dlg.open) return false;
+  return el.getClientRects().length > 0;
+}
+/* When a dialog closes, release focus from its fields so shortcuts work again */
+document.querySelectorAll("dialog").forEach((d) =>
+  d.addEventListener("close", () => {
+    if (d.contains(document.activeElement)) document.activeElement.blur();
+  })
+);
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.body.classList.contains("locked")) return;
+  if (e.key === "Escape" && selecting && !document.querySelector("dialog[open]")) {
+    setSelecting(false);
+    return;
+  }
+  if (document.querySelector("dialog[open]")) return;
+  if (isTyping()) return;
+  const k = e.key.toLowerCase();
+  if (k === "n") { e.preventDefault(); openItem(null); }
+  else if (k === "/") { e.preventDefault(); setTab("dreams"); $("search").focus(); }
+  else if (k === "s") setSelecting(!selecting);
+  else if (k === "t") $("themeBtn").click();
+  else if (k === "1") setTab("dreams");
+  else if (k === "2") setTab("journal");
+  else if (k === "3") setTab("stats");
+});
+
+/* ---------- Lock screen and start-up ---------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function lockError(msg) {
+  $("lockErr").textContent = msg || "";
+  if (!msg) return;
+  const card = document.querySelector(".lock-card");
+  card.classList.remove("shake");
+  void card.offsetWidth;
+  card.classList.add("shake");
+}
+
+function setLocking(on) {
+  $("lockBtn").disabled = on;
+  $("lockBtn").textContent = on ? "Checking…" : (setupMode ? "Create PIN" : "Unlock");
+}
+
+function applyData(data) {
+  profile = { ...DEFAULT_PROFILE, ...data.profile };
+  dreams = data.dreams;
+  activity = data.activity;
+}
+
+async function unlock(p) {
+  // The PIN check is a small request, so the app opens as soon as it passes.
+  await call("GET", "/api/ping", undefined, p);
+  pin = p;
+  sessionStorage.setItem(PIN_KEY, p);
+  document.documentElement.classList.remove("booting");
+
+  loading = true;
+  renderList();
+  $("lock").classList.add("leaving");
+  await sleep(200);
+  document.body.classList.remove("locked");
+  $("lock").classList.remove("leaving");
+  setTab(currentTab);
+  render();
+
+  try {
+    applyData(await call("GET", "/api/data"));
+    if (!dreams.length) await migrateLocal();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    loading = false;
+    render();
+  }
+  if (new URLSearchParams(location.search).has("new")) {
+    history.replaceState(null, "", location.pathname);
+    openItem(null);
+  }
+}
+
+/* Moves a list saved in this browser's old local storage into the database, once. */
+async function migrateLocal() {
+  const legacy = LEGACY_KEYS.map((k) => {
+    try { return JSON.parse(localStorage.getItem(k)); } catch { return null; }
+  }).find((s) => s && Array.isArray(s.items) && s.items.length);
+  if (!legacy) return;
+  await call("POST", "/api/import", { profile: legacy.profile, items: legacy.items });
+  LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+  applyData(await call("GET", "/api/data"));
+  toast("Your older local list was moved to the database");
+}
+
+let setupMode = false;
+function setLockMode(setup) {
+  setupMode = setup;
+  $("lockTitle").textContent = setup ? "Create your PIN" : "Enter your PIN";
+  $("lockNote").textContent = setup
+    ? "Choose 4 to 12 digits. Your list is stored only on this device."
+    : "Your list is stored on this device and opens only with your PIN.";
+  $("pinConfirm").classList.toggle("hide", !setup);
+  $("lockBtn").textContent = setup ? "Create PIN" : "Unlock";
+}
+
+$("lockForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const p = $("pinInput").value.trim();
+  if (!p) return;
+  setLocking(true);
+  lockError("");
+  try {
+    if (setupMode) {
+      if (!/^\d{4,12}$/.test(p)) throw fail(400, "Use 4 to 12 digits");
+      if ($("pinConfirm").value.trim() !== p) throw fail(400, "The PINs don't match");
+      await LocalAPI.setPin(p);
+      $("pinConfirm").value = "";
+      setLockMode(false);
+    }
+    await unlock(p);
+    $("pinInput").value = "";
+  } catch (err) {
+    lockError(err.message);
+    $("pinInput").select();
+  } finally {
+    setLocking(false);
+  }
+});
+
+async function boot() {
+  if (LOCAL) {
+    if (!(await LocalAPI.isConfigured())) {
+      pin = "";
+      sessionStorage.removeItem(PIN_KEY);
+      setLockMode(true);
+      document.documentElement.classList.remove("booting");
+      return;
+    }
+  }
+  if (!pin) {
+    document.documentElement.classList.remove("booting");
+    return;
+  }
+  try {
+    await unlock(pin);
+  } catch (err) {
+    if (err.code === 401) {
+      pin = "";
+      sessionStorage.removeItem(PIN_KEY);
+    }
+    document.documentElement.classList.remove("booting");
+    lockError(err.code === 401 ? "Your PIN has changed. Enter it again." : err.message);
+  }
+}
+
+document.body.classList.toggle("is-local", LOCAL);
+
+$("resetBtn").addEventListener("click", async () => {
+  if (!confirm("Erase all data and the PIN on this device? This cannot be undone.")) return;
+  await LocalAPI.wipe();
+  sessionStorage.removeItem(PIN_KEY);
+  location.reload();
+});
+
+$("pinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const v = (k) => f.elements[k].value.trim();
+  try {
+    if (!/^\d{4,12}$/.test(v("next"))) throw fail(400, "Use 4 to 12 digits");
+    if (v("next") !== v("confirm")) throw fail(400, "The new PINs don't match");
+    await LocalAPI.changePin(v("old"), v("next"));
+    pin = v("next");
+    sessionStorage.setItem(PIN_KEY, pin);
+    f.reset();
+    $("pinDlg").close();
+    toast("PIN changed");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+/* Android back button: close a dialog, or return to the Dreams tab, before leaving the app */
+window.blBack = () => {
+  const open = document.querySelector("dialog[open]");
+  if (open) { open.close(); return true; }
+  if (document.body.classList.contains("locked")) return false;
+  if (selecting) { setSelecting(false); return true; }
+  if (currentTab !== "dreams") { setTab("dreams"); return true; }
+  return false;
+};
+
+$("jFilter").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-jf]");
+  if (!b) return;
+  journalFilter = b.dataset.jf;
+  renderJournal();
+});
+
+initMode();
+if ("serviceWorker" in navigator && !LOCAL) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
+boot();
